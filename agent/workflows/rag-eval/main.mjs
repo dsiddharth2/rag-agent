@@ -138,7 +138,7 @@ export async function runRagEval({ fleetApi, workspace, signal, reportPhase, opt
     workspace,
     signal,
     reportPhase,
-    args: { options },
+    options,
   });
 }
 

@@ -5,7 +5,7 @@ export const meta = { name: 'rag-eval' };
 
 export async function main(context) {
   const { command, agent, log, args } = context;
-  const options = args?.options ?? args;
+  const options = args?.options;
   return runEval({
     agent,
     log: log ?? (() => {}),

@@ -67,16 +67,7 @@ cite the technotes using the returned cited_doc_ids.`,
 
     scheduler: {
       enabled: true,
-      schedules: [
-        {
-          name: 'hello-every-2m',
-          workflow: 'hello',
-          args: {},
-          cron: '*/2 * * * *',
-          timezone: 'UTC',
-          overlap: 'skip',
-        },
-      ],
+      schedules: [],
     },
 
     // -- Memory (uncomment tiers you need) --

@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { parseCli } from '../workflows/rag-eval/main.mjs';
+import { main as ragEvalMain } from '../workflows/rag-eval/rag-eval.js';
 import { loadQrels, runEval } from '../workflows/rag-eval/eval-runner.mjs';
 import { chunk, fakeAgent } from './rag-fakes.mjs';
 
@@ -126,6 +127,65 @@ function makeDoerReviewerAgent({ fleetErrorOnFirst = false } = {}) {
     throw new Error('unexpected member');
   });
 }
+
+test('rag-eval body main accepts engine-shaped context.args', async () => {
+  const { dir, testQueriesPath, qrelsPath } = makeFixtureDir();
+  const reportDir = path.join(dir, 'report-engine-args');
+
+  const command = async (cmd) => {
+    if (cmd.includes('rag.retrieve') && cmd.includes('--out')) {
+      const outMatch = cmd.match(/--out\s+'([^']+)'/) ?? cmd.match(/--out\s+"([^"]+)"/);
+      const outFile = outMatch?.[1];
+      if (outFile) {
+        fs.mkdirSync(path.dirname(outFile), { recursive: true });
+        writeJsonl(outFile, [
+          { query_id: 'q1', chunks: [chunk('g1', 1)] },
+          { query_id: 'q2', chunks: [] },
+          { query_id: 'q3', chunks: [] },
+        ]);
+      }
+      return {
+        ok: true,
+        output: JSON.stringify({ method: 'naive', depth: 50, embedding_model: 'mini' }),
+      };
+    }
+    if (cmd.includes('retrieval_metrics')) {
+      return { ok: true, output: JSON.stringify({ method: 'naive', n: 2, mrr: 0 }) };
+    }
+    return { ok: false, error: `unexpected command: ${cmd}` };
+  };
+
+  const engineArgs = {
+    fleetApi: {},
+    workspace: '/tmp/ws',
+    signal: undefined,
+    reportPhase: () => {},
+    options: {
+      methods: ['naive'],
+      sampleSize: 3,
+      seed: 7,
+      retrievalOnly: true,
+      reportDir,
+      testQueriesPath,
+      qrelsPath,
+      gitCommit: null,
+      indexManifest: null,
+    },
+  };
+
+  await assert.doesNotReject(async () =>
+    ragEvalMain({
+      command,
+      agent: async () => {
+        throw new Error('agent should not run');
+      },
+      log: () => {},
+      args: engineArgs,
+    }),
+  );
+
+  assert.ok(fs.existsSync(path.join(reportDir, 'summary.md')));
+});
 
 test('parseCli defaults and validation', () => {
   assert.deepEqual(parseCli([]), {
