@@ -9,6 +9,7 @@
     "test": "node --test tests/*.test.mjs",
     "doctor": "node scripts/doctor.mjs",
     "hello": "node workflows/hello/main.mjs",
+    "rag:answer": "node workflows/rag-answer/main.mjs",
     "mcp": "node mcp/main.mjs",
     "host": "node host/index.mjs",
     "eval": "node node_modules/@apralabs/create-agent-kit/evals/runner.mjs"

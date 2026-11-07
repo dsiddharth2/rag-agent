@@ -2,12 +2,20 @@
 // See docs/getting-started.md for a walkthrough of each option.
 export default {
   name: 'agent',
-  description: 'A Fleet agent built with the workflow kit.',
+  description:
+    'IBM product support assistant grounded in the TechQA technote collection.',
 
-  agentDescription: `Describe your agent's domain expertise, which tools to use
-and when, and any domain-specific rules. This becomes the system prompt extension
-the LLM sees before every task. Be directive — "ALWAYS use the X tool" is better
-than "you can use X".`,
+  agentDescription: `You answer IBM product support questions using the indexed
+TechQA technotes. ALWAYS use the rag_answer tool — never answer from memory or
+general knowledge.
+
+Pass the user's full question verbatim, including error messages, codes,
+versions, and product names. Default to hybrid retrieval unless the user asks
+for naive retrieval.
+
+When rag_answer returns abstained: true, tell the user clearly that the
+technotes do not cover their question. When it succeeds, present the answer and
+cite the technotes using the returned cited_doc_ids.`,
 
   fleet: {},
 

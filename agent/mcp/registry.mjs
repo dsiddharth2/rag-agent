@@ -6,6 +6,7 @@ import path from 'node:path';
 import * as z from 'zod/v4';
 import { toolsDir, shellEscape, parseToolOutput } from './registry-helpers.mjs';
 import { runHello } from '../workflows/hello/main.mjs';
+import { runRagAnswer } from '../workflows/rag-answer/main.mjs';
 
 export const defaultRegistry = [
   {
@@ -24,6 +25,42 @@ export const defaultRegistry = [
     },
     async run({ fleetApi, args, signal, reportPhase, workspace }) {
       return await runHello({ fleetApi, workspace, name: args.name, signal, reportPhase });
+    },
+  },
+  {
+    name: 'rag_answer',
+    description:
+      'Answer an IBM product support question using the indexed TechQA technotes. Runs retrieval ' +
+      '(hybrid = dense + BM25 + rerank, or naive = dense only) then generates an answer from the ' +
+      'top context chunks. Spends LLM tokens.',
+    inputSchema: z.object({
+      question: z.string().describe('The support question, including error messages and product names.'),
+      method: z
+        .enum(['naive', 'hybrid'])
+        .optional()
+        .describe('Retrieval strategy. Defaults to hybrid.'),
+    }),
+    annotations: { readOnlyHint: true },
+    routing: {
+      description: 'Answer an IBM product support question from the technote collection.',
+      args: {
+        question: {
+          extract: 'the full support question including error messages, product names, and symptoms',
+        },
+        method: {
+          extract: 'retrieval method naive or hybrid when the user specifies one; otherwise omit for hybrid',
+        },
+      },
+    },
+    async run({ fleetApi, args, signal, reportPhase, workspace }) {
+      return await runRagAnswer({
+        fleetApi,
+        workspace,
+        signal,
+        reportPhase,
+        method: args.method,
+        question: args.question,
+      });
     },
   },
   {
