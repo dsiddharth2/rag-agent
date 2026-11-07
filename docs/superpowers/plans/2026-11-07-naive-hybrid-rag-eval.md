@@ -724,7 +724,7 @@ The generated `agent/.gitignore` already ignores `evals/reports/` and `node_modu
 
 Every task above was implemented once in a scratch copy, outside this repo, to check the plan before review. The checks:
 
-- **Unit tests:** all pass. Python has 34 tests. Node has 55: the kit's own plus 29 RAG tests.
+- **Unit tests:** all pass. Python has 34 tests. Node has 55: 52 RAG tests plus the kit's own 3.
 - **Real models, CPU only:**
   - `build_index`: 496 documents → 5,015 chunks, about 1 minute.
   - The smoke question in Task 13 step 2 returns `swg21996508` at rank 1 for both methods.
