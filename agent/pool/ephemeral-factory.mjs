@@ -1,0 +1,148 @@
+import crypto from 'node:crypto';
+import path from 'node:path';
+
+// On-demand doer+reviewer pairs for overflow and serverless deployment. Each
+// pair has a unique id, so no two callers can ever share one -- no lock needed.
+export class EphemeralWorkerFactory {
+  #manager;
+  #config;
+  #active = new Set();
+  #inflight = new Set();
+  #releaseListeners = new Set();
+  #closed = false;
+
+  constructor({ memberManager, config } = {}) {
+    if (!memberManager) throw new Error('EphemeralWorkerFactory requires memberManager');
+    if (!config) throw new Error('EphemeralWorkerFactory requires config');
+    this.#manager = memberManager;
+    this.#config = config;
+  }
+
+  get active() { return this.#active.size; }
+  get maxConcurrent() { return this.#config.maxConcurrent; }
+
+  onRelease(listener) {
+    this.#releaseListeners.add(listener);
+    return () => this.#releaseListeners.delete(listener);
+  }
+
+  async create({ signal, members } = {}) {
+    if (this.#closed) return null;
+    if (this.#active.size >= this.#config.maxConcurrent) return null;
+    signal?.throwIfAborted();
+
+    const id = crypto.randomUUID();
+    const shortId = id.slice(0, 8);
+    const prefix = `EPHEMERAL-${shortId.toUpperCase()}`;
+    const workRoot = path.join(this.#config.workRoot, id);
+    const doerOnly = Array.isArray(members) && members.length === 1 && members[0] === 'doer';
+
+    // Reserve the slot before the slow registration so concurrent creates
+    // cannot overshoot maxConcurrent.
+    const entry = { release: null };
+    this.#active.add(entry);
+
+    const pending = this.#finishCreate({ signal, shortId, prefix, workRoot, entry, doerOnly });
+    this.#inflight.add(pending);
+    try {
+      return await pending;
+    } finally {
+      this.#inflight.delete(pending);
+    }
+  }
+
+  async #finishCreate({ signal, shortId, prefix, workRoot, entry, doerOnly }) {
+    let pair;
+    try {
+      if (doerOnly) {
+        pair = await this.#manager.provisionDoer(prefix, workRoot);
+        pair.reviewer = null;
+      } else {
+        pair = await this.#manager.provisionPair(prefix, workRoot);
+      }
+    } catch (err) {
+      this.#active.delete(entry);
+      try {
+        await this.#manager.teardownPair(prefix, workRoot);
+      } catch (teardownErr) {
+        console.warn(`[ephemeral] teardown after failed create for ${prefix}: ${teardownErr?.message ?? teardownErr}`);
+      }
+      throw err;
+    }
+
+    const controller = new AbortController();
+    if (signal) {
+      if (signal.aborted) controller.abort(signal.reason);
+      else signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true });
+    }
+
+    let ttl = null;
+    let released = false;
+    const release = async () => {
+      if (released) return;
+      released = true;
+      if (ttl) clearTimeout(ttl);
+      try {
+        await Promise.race([
+          this.#manager.teardownPair(prefix, workRoot),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('teardown timeout')), 30000)),
+        ]);
+      } catch (err) {
+        console.warn(`[ephemeral] teardown failed for ${prefix}: ${err?.message ?? err}`);
+      }
+      this.#active.delete(entry);
+      for (const listener of this.#releaseListeners) {
+        try {
+          listener();
+        } catch (err) {
+          console.warn(`[ephemeral] release listener threw: ${err?.message ?? err}`);
+        }
+      }
+    };
+    entry.release = release;
+
+    if (this.#closed) {
+      await release();
+      return null;
+    }
+
+    // Safety net: a task that never releases would leak a Fleet member and a
+    // folder under tmpdir. Abort it cooperatively, then tear down regardless.
+    ttl = setTimeout(() => {
+      controller.abort(new Error(`ephemeral worker ${shortId} exceeded ttl ${this.#config.ttlMs}ms`));
+      void release();
+    }, this.#config.ttlMs);
+    ttl.unref?.();
+
+    const lease = {
+      workerId: `ephemeral-${shortId}`,
+      doer: pair.doer,
+      reviewer: pair.reviewer,
+      signal: controller.signal,
+      release,
+    };
+
+    if (doerOnly) {
+      lease.upgradeToReviewer = async () => {
+        const { reviewer } = await this.#manager.provisionReviewer(prefix, workRoot);
+        lease.reviewer = reviewer;
+      };
+    }
+
+    return lease;
+  }
+
+  async reset() {
+    const count = this.#active.size;
+    if (count === 0) return 0;
+    console.warn(`[ephemeral] force-releasing ${count} orphaned worker(s)`);
+    await Promise.all([...this.#active].map((entry) => entry.release?.()));
+    return count;
+  }
+
+  async close() {
+    this.#closed = true;
+    await Promise.allSettled([...this.#inflight]);
+    await Promise.all([...this.#active].map((entry) => entry.release?.()));
+  }
+}

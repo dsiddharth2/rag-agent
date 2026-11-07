@@ -1,0 +1,9 @@
+.git
+.fleet
+.fleet-src
+.fleet-workflow
+node_modules
+docs
+.env
+.claude
+.cursor
