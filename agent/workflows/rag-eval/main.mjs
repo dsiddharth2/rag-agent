@@ -79,7 +79,7 @@ export function localCommand(cmd) {
 }
 
 function defaultReportDir(now = Date.now()) {
-  const stamp = new Date(now).toISOString().replace(/[:.]/g, '->');
+  const stamp = new Date(now).toISOString().replace(/[:.]/g, '-');
   return path.join(REPORTS_DIR, stamp);
 }
 
