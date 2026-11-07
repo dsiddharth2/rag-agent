@@ -1,0 +1,99 @@
+import { Cron } from 'croner';
+import { validateSchedules } from './validate.mjs';
+import { shouldRun } from './overlap.mjs';
+
+/** Azure Timer Trigger NCRONTAB is 6 fields: second minute hour day month weekday. Spec cron is 5-field. */
+function toNcrontab(cron) {
+  const fields = String(cron).trim().split(/\s+/);
+  if (fields.length === 5) return `0 ${fields.join(' ')}`;
+  return cron;
+}
+
+export function createDurableScheduler(config, { jobs, toolRegistry, logger }) {
+  let started = false;
+  let activeSchedules = [];
+
+  async function tick(schedule, timer) {
+    const tickTime = timer?.scheduleStatus?.last ?? new Date().toISOString();
+    try {
+      const canRun = await shouldRun(schedule.name, schedule.overlap, { jobs, logger });
+      if (!canRun) return;
+
+      const { jobId } = await jobs.submit(
+        {
+          goal: `Scheduled workflow: ${schedule.workflow}`,
+          workflow: schedule.workflow,
+          inputs: schedule.args,
+          strategy: 'workflow',
+        },
+        {
+          metadata: {
+            schedule: {
+              name: schedule.name,
+              tick: typeof tickTime === 'string' ? tickTime : new Date(tickTime).toISOString(),
+            },
+          },
+        },
+      );
+      logger.info?.(`[scheduler] fired "${schedule.name}" → job ${jobId}`);
+    } catch (err) {
+      logger.warn?.(`[scheduler] tick "${schedule.name}" failed: ${err?.message ?? err}`);
+    }
+  }
+
+  return {
+    async start() {
+      if (started) return;
+      activeSchedules = validateSchedules(config.schedules, toolRegistry, { logger });
+      started = true;
+      for (const s of activeSchedules) {
+        logger.info?.(`[scheduler]   ${s.name} → ${s.workflow} (${s.cron} ${s.timezone})`);
+      }
+      logger.info?.(`[scheduler] started (durable) with ${activeSchedules.length} schedule(s)`);
+    },
+
+    async stop() {
+      started = false;
+    },
+
+    registerTimerFunctions(app, { extraInputs = [], getClient, setClient } = {}) {
+      const valid = validateSchedules(config.schedules, toolRegistry, { logger });
+      activeSchedules = valid;
+      for (const schedule of valid) {
+        const timerConfig = {
+          schedule: toNcrontab(schedule.cron),
+          extraInputs,
+          handler: async (timer, context) => {
+            if (getClient && setClient) {
+              try { setClient(getClient(context)); } catch { /* best-effort */ }
+            }
+            await tick(schedule, timer);
+          },
+        };
+        if (schedule.timezone && schedule.timezone !== 'UTC') {
+          timerConfig.runOnStartup = false;
+        }
+        app.timer(`schedule-${schedule.name}`, timerConfig);
+      }
+    },
+
+    getSchedules() {
+      return activeSchedules.map(schedule => {
+        let nextRun = null;
+        try {
+          const cron = new Cron(schedule.cron, { timezone: schedule.timezone });
+          nextRun = cron.nextRun()?.toISOString() ?? null;
+        } catch { /* best-effort */ }
+        return {
+          name: schedule.name,
+          workflow: schedule.workflow,
+          args: schedule.args,
+          cron: schedule.cron,
+          timezone: schedule.timezone,
+          overlap: schedule.overlap,
+          nextRun,
+        };
+      });
+    },
+  };
+}
