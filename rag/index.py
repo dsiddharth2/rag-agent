@@ -110,6 +110,12 @@ def load_index(index_dir: Path | str, expected: dict | None = None) -> Index:
         if have != want:
             raise _stale(f"index {key}={have!r} does not match expected {want!r}")
 
+    artifacts = ("chunks.jsonl", "embeddings.npy", "bm25.pkl")
+    for name in artifacts:
+        path = index_dir / name
+        if not path.is_file():
+            raise _stale(f"index artifact missing: {name}")
+
     chunks: list[Chunk] = []
     for row in read_jsonl(index_dir / "chunks.jsonl"):
         chunks.append(
@@ -129,9 +135,10 @@ def load_index(index_dir: Path | str, expected: dict | None = None) -> Index:
         raise _stale(
             f"embeddings rows {embeddings.shape[0]} != manifest n_chunks={n_chunks}"
         )
-    if len(bm25.doc_freqs) != n_chunks:
+    bm25_n = bm25.corpus_size
+    if bm25_n != n_chunks:
         raise _stale(
-            f"bm25 corpus size {len(bm25.doc_freqs)} != manifest n_chunks={n_chunks}"
+            f"bm25 corpus size {bm25_n} != manifest n_chunks={n_chunks}"
         )
 
     return Index(chunks, embeddings, bm25, manifest)
